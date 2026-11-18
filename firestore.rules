@@ -1,0 +1,768 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Jaring Pengaman Global (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidSha256Id(id) {
+      return id is string && id.size() == 64 && id.matches('^[a-f0-9]{64}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'lulukqueen17@gmail.com';
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'lulukqueen17@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // --- Validation Blueprints ---
+    function isValidBusiness(data) {
+      return data.keys().hasAll([
+        'name', 'category', 'address', 'googleReviewUrl', 'isActive', 'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'name', 'category', 'address', 'city', 'phone', 'openingHours', 'description',
+        'googleReviewUrl', 'coverImageUrl', 'isActive', 'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+      && data.category is string && data.category.size() >= 1 && data.category.size() <= 60
+      && data.address is string && data.address.size() >= 1 && data.address.size() <= 250
+      && (!('city' in data) || (data.city is string && data.city.size() <= 80))
+      && (!('phone' in data) || (data.phone is string && data.phone.size() <= 40))
+      && (!('openingHours' in data) || (data.openingHours is string && data.openingHours.size() <= 120))
+      && (!('description' in data) || (data.description is string && data.description.size() <= 1000))
+      && data.googleReviewUrl is string && data.googleReviewUrl.size() >= 8 && data.googleReviewUrl.size() <= 500
+      && data.googleReviewUrl.matches('^https?://.*')
+      && (!('coverImageUrl' in data) || (data.coverImageUrl is string && data.coverImageUrl.size() <= 1500))
+      && data.isActive is bool
+      && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidGuide(data) {
+      return data.keys().hasAll([
+        'businessId', 'title', 'question', 'order', 'isActive', 'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'businessId', 'title', 'question', 'order', 'isActive', 'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && isValidId(data.businessId)
+      && data.title is string && data.title.size() >= 1 && data.title.size() <= 100
+      && data.question is string && data.question.size() >= 1 && data.question.size() <= 400
+      && data.order is number && data.order >= 1 && data.order <= 20
+      && data.isActive is bool
+      && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidGalleryItem(data) {
+      return data.keys().hasAll([
+        'imageId', 'businessId', 'title', 'fileName', 'category', 'imageUrl',
+        'imageType', 'isActive', 'usagePermission', 'order', 'uploadedAt',
+        'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'imageId', 'businessId', 'title', 'fileName', 'category', 'description',
+        'imageUrl', 'thumbnailUrl', 'storagePath', 'imageType', 'isActive',
+        'usagePermission', 'attribution', 'order', 'uploadedAt', 'createdBy',
+        'createdAt', 'updatedAt'
+      ])
+      && isValidId(data.imageId)
+      && isValidId(data.businessId)
+      && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+      && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160
+      && data.category in [
+        'Cover bisnis', 'Eksterior', 'Interior', 'Fasilitas',
+        'Produk', 'Aktivitas', 'Dokumentasi lainnya'
+      ]
+      && (!('description' in data) || (data.description is string && data.description.size() <= 400))
+      && data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 1500
+      && (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1500))
+      && (!('storagePath' in data) || (data.storagePath is string && data.storagePath.size() <= 500))
+      && data.imageType == 'promo'
+      && data.isActive is bool
+      && data.usagePermission in ['public_view', 'download_permitted', 'internal_only']
+      && (!('attribution' in data) || (data.attribution is string && data.attribution.size() <= 160))
+      && data.order is number && data.order >= 1 && data.order <= 100
+      && data.uploadedAt is timestamp
+      && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidVisitEvent(data) {
+      return data.keys().hasAll(['businessId', 'businessOwnerId', 'eventType', 'source', 'createdAt'])
+      && data.keys().hasOnly(['businessId', 'businessOwnerId', 'eventType', 'source', 'createdAt'])
+      && isValidId(data.businessId)
+      && data.businessOwnerId is string && data.businessOwnerId.size() >= 1 && data.businessOwnerId.size() <= 128
+      && data.eventType in ['page_view', 'qr_scan', 'copy_text', 'open_maps']
+      && data.source in ['portal', 'qr']
+      && data.createdAt is timestamp;
+    }
+
+    function isValidServiceItem(data) {
+      return data.keys().hasAll([
+        'name', 'description', 'order', 'isActive', 'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'name', 'description', 'estimatedDuration', 'deliverables', 'order', 'isActive', 'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+      && data.description is string && data.description.size() >= 1 && data.description.size() <= 500
+      && (!('estimatedDuration' in data) || (data.estimatedDuration is string && data.estimatedDuration.size() <= 80))
+      && (!('deliverables' in data) || (data.deliverables is string && data.deliverables.size() <= 400))
+      && data.order is number && data.order >= 1 && data.order <= 100
+      && data.isActive is bool
+      && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidServiceBooking(data) {
+      return data.keys().hasAll([
+        'bookingCode', 'lookupHash', 'customerName', 'customerEmail', 'customerWhatsapp',
+        'businessName', 'googleMapsUrl', 'businessCategory', 'businessAddress', 'businessCity',
+        'serviceType', 'status', 'submittedAtLabel', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'bookingCode', 'lookupHash', 'customerName', 'customerEmail', 'customerWhatsapp',
+        'businessName', 'googleMapsUrl', 'businessCategory', 'businessAddress', 'businessCity',
+        'packageTier', 'packagePrice', 'serviceId', 'serviceType', 'photos', 'notes', 'status',
+        'adminNotes', 'rejectionReason', 'linkedBusinessId', 'submittedAtLabel', 'createdAt', 'updatedAt'
+      ])
+      && data.bookingCode is string && data.bookingCode.size() >= 6 && data.bookingCode.size() <= 32
+      && data.bookingCode.matches('^BK-[A-Z0-9\\-]+$')
+      && isValidSha256Id(data.lookupHash)
+      && data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120
+      && data.customerEmail is string && data.customerEmail.size() >= 5 && data.customerEmail.size() <= 160
+      && data.customerWhatsapp is string && data.customerWhatsapp.size() >= 8 && data.customerWhatsapp.size() <= 30
+      && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 120
+      && data.googleMapsUrl is string && data.googleMapsUrl.size() >= 10 && data.googleMapsUrl.size() <= 500
+      && data.googleMapsUrl.matches('^https://.*')
+      && data.businessCategory is string && data.businessCategory.size() >= 1 && data.businessCategory.size() <= 60
+      && data.businessAddress is string && data.businessAddress.size() >= 5 && data.businessAddress.size() <= 250
+      && data.businessCity is string && data.businessCity.size() >= 2 && data.businessCity.size() <= 80
+      && (!('packageTier' in data) || (data.packageTier is string && data.packageTier.size() <= 60))
+      && (!('packagePrice' in data) || (data.packagePrice is number && data.packagePrice >= 0))
+      && (!('serviceId' in data) || (data.serviceId is string && data.serviceId.size() <= 128))
+      && data.serviceType is string && data.serviceType.size() >= 2 && data.serviceType.size() <= 120
+      && (!('photos' in data) || (data.photos is list && data.photos.size() <= 5))
+      && (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000))
+      && data.status in ['pending_approval', 'revision_requested', 'approved', 'in_progress', 'waiting_for_customer', 'completed', 'rejected']
+      && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000))
+      && (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 600))
+      && (!('linkedBusinessId' in data) || (data.linkedBusinessId is string && data.linkedBusinessId.size() <= 128))
+      && data.submittedAtLabel is string && data.submittedAtLabel.size() >= 4 && data.submittedAtLabel.size() <= 80
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidBookingStatusIndex(data) {
+      return data.keys().hasAll([
+        'bookingCode', 'businessName', 'businessCategory', 'businessCity',
+        'serviceType', 'status', 'submittedAtLabel', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'bookingCode', 'businessName', 'businessCategory', 'businessCity',
+        'serviceType', 'status', 'statusMessage', 'submittedAtLabel', 'updatedAt'
+      ])
+      && data.bookingCode is string && data.bookingCode.size() >= 6 && data.bookingCode.size() <= 32
+      && data.bookingCode.matches('^BK-[A-Z0-9\\-]+$')
+      && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 120
+      && data.businessCategory is string && data.businessCategory.size() >= 1 && data.businessCategory.size() <= 60
+      && data.businessCity is string && data.businessCity.size() >= 2 && data.businessCity.size() <= 80
+      && data.serviceType is string && data.serviceType.size() >= 2 && data.serviceType.size() <= 120
+      && data.status in ['pending_approval', 'revision_requested', 'approved', 'in_progress', 'waiting_for_customer', 'completed', 'rejected']
+      && (!('statusMessage' in data) || (data.statusMessage is string && data.statusMessage.size() <= 1000))
+      && data.submittedAtLabel is string && data.submittedAtLabel.size() >= 4 && data.submittedAtLabel.size() <= 80
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidBookingAuditLog(data) {
+      return data.keys().hasAll([
+        'bookingId', 'bookingCode', 'fromStatus', 'toStatus', 'actorUid', 'actorEmail', 'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'bookingId', 'bookingCode', 'fromStatus', 'toStatus', 'reason', 'actorUid', 'actorEmail', 'createdAt'
+      ])
+      && isValidId(data.bookingId)
+      && data.bookingCode is string && data.bookingCode.size() >= 6 && data.bookingCode.size() <= 32
+      && data.fromStatus in ['pending_approval', 'revision_requested', 'approved', 'in_progress', 'waiting_for_customer', 'completed', 'rejected']
+      && data.toStatus in ['pending_approval', 'revision_requested', 'approved', 'in_progress', 'waiting_for_customer', 'completed', 'rejected']
+      && (!('reason' in data) || (data.reason is string && data.reason.size() <= 1000))
+      && data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128
+      && data.actorEmail is string && data.actorEmail.size() >= 3 && data.actorEmail.size() <= 160
+      && data.createdAt is timestamp;
+    }
+
+    function isValidSurveyCampaign(data) {
+      return data.keys().hasAll([
+        'title', 'description', 'questionPrompt', 'compensationAmount', 'eligibilityRule',
+        'isActive', 'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'title', 'description', 'questionPrompt', 'compensationAmount', 'eligibilityRule',
+        'isActive', 'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+      && data.description is string && data.description.size() >= 1 && data.description.size() <= 500
+      && data.questionPrompt is string && data.questionPrompt.size() >= 1 && data.questionPrompt.size() <= 400
+      && data.compensationAmount is number && data.compensationAmount >= 0 && data.compensationAmount <= 1500
+      && data.eligibilityRule is string && data.eligibilityRule.size() >= 1 && data.eligibilityRule.size() <= 400
+      && data.isActive is bool
+      && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidSurveyResponse(data) {
+      return data.keys().hasAll([
+        'surveyId', 'surveyTitle', 'businessName', 'respondentName', 'respondentEmail',
+        'respondentWhatsapp', 'visitDate', 'experienceFeedback',
+        'consentIndependentFromGoogle', 'rewardEligibleStatus', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'participationCode', 'lookupHash', 'surveyId', 'surveyTitle', 'businessId', 'businessName',
+        'respondentName', 'respondentEmail', 'respondentWhatsapp', 'visitDate', 'experienceFeedback',
+        'consentIndependentFromGoogle', 'rewardEligibleStatus', 'adminNotes', 'payoutReference',
+        'paidAtLabel', 'submittedAtLabel', 'createdAt', 'updatedAt'
+      ])
+      && (!('participationCode' in data) || (data.participationCode is string && data.participationCode.size() >= 6 && data.participationCode.size() <= 32 && data.participationCode.matches('^PR-[A-Z0-9\\-]+$')))
+      && (!('lookupHash' in data) || data.lookupHash == '' || isValidSha256Id(data.lookupHash))
+      && isValidId(data.surveyId)
+      && data.surveyTitle is string && data.surveyTitle.size() >= 1 && data.surveyTitle.size() <= 140
+      && (!('businessId' in data) || (data.businessId is string && data.businessId.size() <= 128))
+      && data.businessName is string && data.businessName.size() >= 1 && data.businessName.size() <= 120
+      && data.respondentName is string && data.respondentName.size() >= 2 && data.respondentName.size() <= 120
+      && data.respondentEmail is string && data.respondentEmail.size() >= 5 && data.respondentEmail.size() <= 160
+      && data.respondentWhatsapp is string && data.respondentWhatsapp.size() >= 8 && data.respondentWhatsapp.size() <= 30
+      && data.visitDate is string && data.visitDate.size() >= 4 && data.visitDate.size() <= 40
+      && data.experienceFeedback is string && data.experienceFeedback.size() >= 20 && data.experienceFeedback.size() <= 1500
+      && data.consentIndependentFromGoogle is bool
+      && data.rewardEligibleStatus in ['pending_review', 'revision_requested', 'eligible', 'not_eligible', 'paid']
+      && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+      && (!('payoutReference' in data) || (data.payoutReference is string && data.payoutReference.size() <= 160))
+      && (!('paidAtLabel' in data) || (data.paidAtLabel is string && data.paidAtLabel.size() <= 80))
+      && (!('submittedAtLabel' in data) || (data.submittedAtLabel is string && data.submittedAtLabel.size() <= 80))
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidSurveyStatusIndex(data) {
+      return data.keys().hasAll([
+        'participationCode', 'surveyTitle', 'businessName', 'visitDate',
+        'compensationAmount', 'rewardEligibleStatus', 'submittedAtLabel', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'participationCode', 'surveyTitle', 'businessName', 'visitDate',
+        'compensationAmount', 'rewardEligibleStatus', 'adminNotes', 'payoutReference',
+        'submittedAtLabel', 'updatedAt'
+      ])
+      && data.participationCode is string && data.participationCode.size() >= 6 && data.participationCode.size() <= 32
+      && data.participationCode.matches('^PR-[A-Z0-9\\-]+$')
+      && data.surveyTitle is string && data.surveyTitle.size() >= 1 && data.surveyTitle.size() <= 140
+      && data.businessName is string && data.businessName.size() >= 1 && data.businessName.size() <= 120
+      && data.visitDate is string && data.visitDate.size() >= 4 && data.visitDate.size() <= 40
+      && data.compensationAmount is number && data.compensationAmount >= 0 && data.compensationAmount <= 1500
+      && data.rewardEligibleStatus in ['pending_review', 'revision_requested', 'eligible', 'not_eligible', 'paid']
+      && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+      && (!('payoutReference' in data) || (data.payoutReference is string && data.payoutReference.size() <= 160))
+      && data.submittedAtLabel is string && data.submittedAtLabel.size() >= 4 && data.submittedAtLabel.size() <= 80
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidHelpRequest(data) {
+      return data.keys().hasAll([
+        'ticketCode', 'participantName', 'participantEmail', 'topic', 'message', 'status', 'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'ticketCode', 'participantName', 'participantEmail', 'topic', 'message', 'participationCode', 'status', 'createdAt'
+      ])
+      && data.ticketCode is string && data.ticketCode.size() >= 6 && data.ticketCode.size() <= 32
+      && data.ticketCode.matches('^HLP-[A-Z0-9\\-]+$')
+      && data.participantName is string && data.participantName.size() >= 2 && data.participantName.size() <= 120
+      && data.participantEmail is string && data.participantEmail.size() >= 5 && data.participantEmail.size() <= 160
+      && data.topic is string && data.topic.size() >= 2 && data.topic.size() <= 120
+      && data.message is string && data.message.size() >= 10 && data.message.size() <= 1200
+      && (!('participationCode' in data) || (data.participationCode is string && data.participationCode.size() <= 32))
+      && data.status in ['open', 'resolved']
+      && data.createdAt is timestamp;
+    }
+
+    function isValidEmailLog(data) {
+      return data.keys().hasAll([
+        'referenceId', 'referenceCode', 'eventType', 'recipientMasked', 'subject', 'deliveryStatus', 'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'referenceId', 'referenceCode', 'bookingId', 'bookingCode', 'eventType',
+        'recipientMasked', 'subject', 'deliveryStatus', 'statusNote', 'createdAt'
+      ])
+      && isValidId(data.referenceId)
+      && data.referenceCode is string && data.referenceCode.size() >= 4 && data.referenceCode.size() <= 40
+      && (!('bookingId' in data) || (data.bookingId is string && data.bookingId.size() <= 128))
+      && (!('bookingCode' in data) || (data.bookingCode is string && data.bookingCode.size() <= 40))
+      && data.eventType in [
+        'new_booking_admin', 'booking_approved', 'booking_rejected', 'booking_revision',
+        'new_survey_admin', 'survey_received', 'survey_revision_requested', 'survey_approved', 'survey_rejected',
+        'participant_help_admin'
+      ]
+      && data.recipientMasked is string && data.recipientMasked.size() >= 3 && data.recipientMasked.size() <= 120
+      && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 200
+      && data.deliveryStatus in ['sent', 'pending_config', 'failed']
+      && (!('statusNote' in data) || (data.statusNote is string && data.statusNote.size() <= 300))
+      && data.createdAt is timestamp;
+    }
+
+    function isValidPortalSettings(data) {
+      return data.keys().hasAll([
+        'portalName', 'welcomeHeadline', 'welcomeSubheadline', 'reviewEthicsNote', 'updatedBy', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'portalName', 'welcomeHeadline', 'welcomeSubheadline', 'reviewEthicsNote',
+        'bookingFormOpen', 'bookingFormIntro', 'requireNotesOnBooking', 'surveyCompensationNote',
+        'updatedBy', 'updatedAt'
+      ])
+      && data.portalName is string && data.portalName.size() >= 1 && data.portalName.size() <= 100
+      && data.welcomeHeadline is string && data.welcomeHeadline.size() >= 1 && data.welcomeHeadline.size() <= 160
+      && data.welcomeSubheadline is string && data.welcomeSubheadline.size() >= 1 && data.welcomeSubheadline.size() <= 350
+      && data.reviewEthicsNote is string && data.reviewEthicsNote.size() >= 1 && data.reviewEthicsNote.size() <= 400
+      && (!('bookingFormOpen' in data) || data.bookingFormOpen is bool)
+      && (!('bookingFormIntro' in data) || (data.bookingFormIntro is string && data.bookingFormIntro.size() <= 400))
+      && (!('requireNotesOnBooking' in data) || data.requireNotesOnBooking is bool)
+      && (!('surveyCompensationNote' in data) || (data.surveyCompensationNote is string && data.surveyCompensationNote.size() <= 500))
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminDoc(data) {
+      return data.keys().hasAll(['email', 'addedBy', 'createdAt'])
+      && data.keys().hasOnly(['email', 'displayName', 'addedBy', 'createdAt'])
+      && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+      && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100))
+      && data.addedBy is string && data.addedBy.size() >= 1 && data.addedBy.size() <= 128
+      && data.createdAt is timestamp;
+    }
+
+    // --- Test Connection ---
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // --- Businesses Collection (Admin-Controlled Directory) ---
+    match /businesses/{businessId} {
+      allow get: if isValidId(businessId) && (existing().isActive == true || isAdmin());
+      allow list: if resource.data.isActive == true || (
+        isVerifiedUser() && (
+          request.auth.token.email == 'lulukqueen17@gmail.com' ||
+          resource.data.createdBy == request.auth.uid
+        )
+      );
+
+      allow create: if isAdmin()
+        && isValidId(businessId)
+        && isValidBusiness(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(businessId)
+        && isValidBusiness(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'category', 'address', 'city', 'phone', 'openingHours', 'description',
+          'googleReviewUrl', 'coverImageUrl', 'isActive', 'updatedAt'
+        ]);
+
+      allow delete: if isAdmin() && isValidId(businessId);
+
+      // --- Guides Subcollection ---
+      match /guides/{guideId} {
+        allow get: if isValidId(businessId) && isValidId(guideId) && (existing().isActive == true || isAdmin());
+        allow list: if resource.data.isActive == true || (
+          isVerifiedUser() && (
+            request.auth.token.email == 'lulukqueen17@gmail.com' ||
+            resource.data.createdBy == request.auth.uid
+          )
+        );
+
+        allow create: if isAdmin()
+          && isValidId(businessId)
+          && isValidId(guideId)
+          && isValidGuide(incoming())
+          && incoming().businessId == businessId
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/businesses/$(businessId));
+
+        allow update: if isAdmin()
+          && isValidId(businessId)
+          && isValidId(guideId)
+          && isValidGuide(incoming())
+          && incoming().businessId == existing().businessId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'question', 'order', 'isActive', 'updatedAt'
+          ]);
+
+        allow delete: if isAdmin() && isValidId(businessId) && isValidId(guideId);
+      }
+
+      // --- Gallery Subcollection ---
+      match /gallery/{imageId} {
+        allow get: if isValidId(businessId) && isValidId(imageId) && (
+          (
+            existing().isActive == true &&
+            existing().usagePermission in ['public_view', 'download_permitted']
+          ) || isAdmin()
+        );
+        allow list: if (
+          resource.data.isActive == true &&
+          resource.data.usagePermission in ['public_view', 'download_permitted']
+        ) || (
+          isVerifiedUser() && (
+            request.auth.token.email == 'lulukqueen17@gmail.com' ||
+            resource.data.createdBy == request.auth.uid
+          )
+        );
+
+        allow create: if isAdmin()
+          && isValidId(businessId)
+          && isValidId(imageId)
+          && isValidGalleryItem(incoming())
+          && incoming().imageId == imageId
+          && incoming().businessId == businessId
+          && incoming().createdBy == request.auth.uid
+          && incoming().uploadedAt == request.time
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/businesses/$(businessId));
+
+        allow update: if isAdmin()
+          && isValidId(businessId)
+          && isValidId(imageId)
+          && isValidGalleryItem(incoming())
+          && incoming().businessId == existing().businessId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'imageId', 'title', 'fileName', 'category', 'description',
+            'imageUrl', 'thumbnailUrl', 'storagePath', 'isActive',
+            'usagePermission', 'attribution', 'order', 'uploadedAt', 'updatedAt'
+          ]);
+
+        allow delete: if isAdmin() && isValidId(businessId) && isValidId(imageId);
+      }
+    }
+
+    // --- Services Catalog (Admin-Controlled) ---
+    match /services/{serviceId} {
+      allow get: if isValidId(serviceId) && (existing().isActive == true || isAdmin());
+      allow list: if resource.data.isActive == true || (
+        isVerifiedUser() && (
+          request.auth.token.email == 'lulukqueen17@gmail.com' ||
+          resource.data.createdBy == request.auth.uid
+        )
+      );
+
+      allow create: if isAdmin()
+        && isValidId(serviceId)
+        && isValidServiceItem(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(serviceId)
+        && isValidServiceItem(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'description', 'estimatedDuration', 'deliverables', 'order', 'isActive', 'updatedAt'
+        ]);
+
+      allow delete: if isAdmin() && isValidId(serviceId);
+    }
+
+    // --- Service Bookings (Customer Submit Only, Admin Read/Process Only) ---
+    match /serviceBookings/{bookingId} {
+      allow get: if isValidId(bookingId) && isAdmin();
+      allow list: if isVerifiedUser() && request.auth.token.email == 'lulukqueen17@gmail.com';
+
+      allow create: if isValidId(bookingId)
+        && isValidServiceBooking(incoming())
+        && incoming().status == 'pending_approval'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/bookingStatusIndex/$(incoming().lookupHash));
+
+      allow update: if isAdmin()
+        && isValidId(bookingId)
+        && isValidServiceBooking(incoming())
+        && incoming().bookingCode == existing().bookingCode
+        && incoming().lookupHash == existing().lookupHash
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'status', 'adminNotes', 'rejectionReason', 'linkedBusinessId', 'updatedAt'
+        ]);
+
+      allow delete: if isAdmin() && isValidId(bookingId);
+    }
+
+    // --- Booking Status Index (No-PII SHA-256 Lookup, No Listing) ---
+    match /bookingStatusIndex/{lookupHash} {
+      allow get: if isValidSha256Id(lookupHash);
+      allow list: if false;
+
+      allow create: if isValidSha256Id(lookupHash)
+        && isValidBookingStatusIndex(incoming())
+        && incoming().status == 'pending_approval'
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidSha256Id(lookupHash)
+        && isValidBookingStatusIndex(incoming())
+        && incoming().bookingCode == existing().bookingCode
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'status', 'statusMessage', 'updatedAt'
+        ]);
+
+      allow delete: if isAdmin() && isValidSha256Id(lookupHash);
+    }
+
+    // --- Booking Audit Logs (Immutable, Admin-Only) ---
+    match /bookingAuditLogs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isVerifiedUser() && request.auth.token.email == 'lulukqueen17@gmail.com';
+
+      allow create: if isAdmin()
+        && isValidId(logId)
+        && isValidBookingAuditLog(incoming())
+        && incoming().actorUid == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // --- Surveys & Responses (Terpisah dari Ulasan Google Maps) ---
+    match /surveys/{surveyId} {
+      allow get: if isValidId(surveyId) && (existing().isActive == true || isAdmin());
+      allow list: if resource.data.isActive == true || (
+        isVerifiedUser() && (
+          request.auth.token.email == 'lulukqueen17@gmail.com' ||
+          resource.data.createdBy == request.auth.uid
+        )
+      );
+
+      allow create: if isAdmin()
+        && isValidId(surveyId)
+        && isValidSurveyCampaign(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(surveyId)
+        && isValidSurveyCampaign(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'description', 'questionPrompt', 'compensationAmount', 'eligibilityRule', 'isActive', 'updatedAt'
+        ]);
+
+      allow delete: if isAdmin() && isValidId(surveyId);
+    }
+
+    match /surveyResponses/{responseId} {
+      allow get: if isValidId(responseId) && isAdmin();
+      allow list: if isVerifiedUser() && request.auth.token.email == 'lulukqueen17@gmail.com';
+
+      allow create: if isValidId(responseId)
+        && isValidSurveyResponse(incoming())
+        && incoming().consentIndependentFromGoogle == true
+        && incoming().rewardEligibleStatus == 'pending_review'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/surveys/$(incoming().surveyId))
+        && (
+          !('lookupHash' in incoming()) ||
+          incoming().lookupHash == '' ||
+          existsAfter(/databases/$(database)/documents/surveyStatusIndex/$(incoming().lookupHash))
+        );
+
+      allow update: if isAdmin()
+        && isValidId(responseId)
+        && isValidSurveyResponse(incoming())
+        && incoming().surveyId == existing().surveyId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'rewardEligibleStatus', 'adminNotes', 'payoutReference', 'paidAtLabel', 'updatedAt'
+        ]);
+
+      allow delete: if isAdmin() && isValidId(responseId);
+    }
+
+    // --- Survey Status Index (No-PII SHA-256 Lookup, No Listing) ---
+    match /surveyStatusIndex/{lookupHash} {
+      allow get: if isValidSha256Id(lookupHash);
+      allow list: if false;
+
+      allow create: if isValidSha256Id(lookupHash)
+        && isValidSurveyStatusIndex(incoming())
+        && incoming().rewardEligibleStatus == 'pending_review'
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidSha256Id(lookupHash)
+        && isValidSurveyStatusIndex(incoming())
+        && incoming().participationCode == existing().participationCode
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'rewardEligibleStatus', 'adminNotes', 'payoutReference', 'updatedAt'
+        ]);
+
+      allow delete: if isAdmin() && isValidSha256Id(lookupHash);
+    }
+
+    // --- Help Requests (Peserta Kirim, Hanya Admin Baca) ---
+    match /helpRequests/{requestId} {
+      allow get: if isValidId(requestId) && isAdmin();
+      allow list: if isVerifiedUser() && request.auth.token.email == 'lulukqueen17@gmail.com';
+
+      allow create: if isValidId(requestId)
+        && isValidHelpRequest(incoming())
+        && incoming().status == 'open'
+        && incoming().createdAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(requestId)
+        && isValidHelpRequest(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+
+      allow delete: if isAdmin() && isValidId(requestId);
+    }
+
+    // --- Email Notification Logs ---
+    match /emailLogs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isVerifiedUser() && request.auth.token.email == 'lulukqueen17@gmail.com';
+
+      allow create: if isValidId(logId)
+        && isValidEmailLog(incoming())
+        && incoming().createdAt == request.time
+        && (
+          isAdmin() ||
+          (
+            incoming().eventType == 'new_booking_admin' &&
+            exists(/databases/$(database)/documents/serviceBookings/$(incoming().referenceId))
+          ) ||
+          (
+            incoming().eventType in ['new_survey_admin', 'survey_received'] &&
+            exists(/databases/$(database)/documents/surveyResponses/$(incoming().referenceId))
+          ) ||
+          (
+            incoming().eventType == 'participant_help_admin' &&
+            exists(/databases/$(database)/documents/helpRequests/$(incoming().referenceId))
+          )
+        );
+
+      allow update, delete: if false;
+    }
+
+    // --- Visit Events Collection (Statistik Anonim, Baca Hanya Admin) ---
+    match /visitEvents/{eventId} {
+      allow get: if isValidId(eventId) && isAdmin();
+      allow list: if isVerifiedUser() && (
+        request.auth.token.email == 'lulukqueen17@gmail.com' ||
+        resource.data.businessOwnerId == request.auth.uid
+      );
+
+      allow create: if isValidId(eventId)
+        && isValidVisitEvent(incoming())
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/businesses/$(incoming().businessId))
+        && get(/databases/$(database)/documents/businesses/$(incoming().businessId)).data.isActive == true
+        && get(/databases/$(database)/documents/businesses/$(incoming().businessId)).data.createdBy == incoming().businessOwnerId;
+
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(eventId);
+    }
+
+    // --- Portal Settings ---
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'portal';
+      allow list: if false;
+
+      allow create, update: if isAdmin()
+        && isValidId(settingId)
+        && settingId == 'portal'
+        && isValidPortalSettings(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+
+      allow delete: if false;
+    }
+
+    // --- Admins Collection ---
+    match /admins/{uid} {
+      allow get: if isVerifiedUser() && (request.auth.uid == uid || isAdmin());
+      allow list: if isVerifiedUser() && request.auth.token.email == 'lulukqueen17@gmail.com';
+
+      allow create: if isBootstrappedAdmin()
+        && isValidId(uid)
+        && isValidAdminDoc(incoming())
+        && incoming().addedBy == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow update: if isBootstrappedAdmin()
+        && isValidId(uid)
+        && isValidAdminDoc(incoming())
+        && incoming().addedBy == existing().addedBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'displayName']);
+
+      allow delete: if isBootstrappedAdmin() && isValidId(uid) && uid != request.auth.uid;
+    }
+  }
+}

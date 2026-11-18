@@ -1,0 +1,6 @@
+{
+  "name": "Portal Ulasan Maps",
+  "description": "Portal panduan menulis ulasan pengalaman pribadi untuk lokasi bisnis di Google Maps dengan kode QR per lokasi dan dasbor pengelola.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
